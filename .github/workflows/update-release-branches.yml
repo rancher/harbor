@@ -1,0 +1,127 @@
+name: Update Release Branches
+
+on:
+  schedule:
+    - cron: '0 8 * * 1'
+  workflow_dispatch:
+    inputs:
+      target_branches:
+        description: 'Comma-separated list of release branches to update (empty for all)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  update-release-branches:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_PAT }} # TODO add token to repo
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/goharbor/harbor.git 2>/dev/null || true
+
+      - name: Fetch upstream
+        run: |
+          git fetch upstream --tags --force
+
+      - name: Get release branches from upstream
+        id: branches
+        run: |
+          # Fetch all release branches matching release-X.X.X pattern
+          branches=()
+          while IFS= read -r branch; do
+            branches+=("$branch")
+          done < <(git ls-remote --refs upstream 'refs/heads/release-*' | cut -f2 | sed 's|refs/heads/||' | sort -V)
+
+          if [ ${#branches[@]} -eq 0 ]; then
+            echo "No release branches found upstream"
+            echo "branches_json=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Convert to JSON array
+          json=$(printf '%s\n' "${branches[@]}" | jq -R . | jq -s .)
+          echo "branches_json=$json" >> "$GITHUB_OUTPUT"
+          echo "Found ${#branches[@]} release branches"
+
+      - name: Filter branches (if specified via input)
+        if: github.event.inputs.target_branches != ''
+        id: filter
+        run: |
+          IFS=',' read -ra TARGETS <<< "${{ github.event.inputs.target_branches }}"
+          filtered=$(printf '%s\n' "${TARGETS[@]}" | jq -R . | jq -s .)
+          echo "filtered_json=$filtered" >> "$GITHUB_OUTPUT"
+
+      - name: Update branches
+        run: |
+          branches_json="${{ steps.branches.outputs.branches_json }}"
+          
+          if [ -n "${{ steps.filter.outputs.filtered_json }}" ]; then
+            branches_json="${{ steps.filter.outputs.filtered_json }}"
+          fi
+
+          if [ "$branches_json" = "null" ] || [ "$branches_json" = "" ]; then
+            echo "No branches to update"
+            exit 0
+          fi
+
+          branch_list=$(echo "$branches_json" | jq -r '.[]')
+
+          updated=0
+          skipped=0
+          failed=0
+
+          while IFS= read -r branch; do
+            [ -z "$branch" ] && continue
+
+            echo "=========================================="
+            echo "Processing: $branch"
+            echo "=========================================="
+
+            # Check if branch exists locally
+            if git rev-parse --verify "refs/heads/$branch" &>/dev/null; then
+              echo "Branch '$branch' exists locally, fetching latest from upstream..."
+              git checkout "$branch" 2>/dev/null
+              git pull upstream "$branch" --ff-only || {
+                echo "  WARNING: Fast-forward failed for '$branch', force updating..."
+                git reset --hard "upstream/$branch"
+              }
+            else
+              echo "Branch '$branch' does not exist locally, creating from upstream..."
+              git checkout -b "$branch" "upstream/$branch"
+            fi
+
+            # Push to origin
+            if git push origin "$branch" --force-with-lease 2>/dev/null; then
+              echo "  SUCCESS: Updated and pushed '$branch'"
+              updated=$((updated + 1))
+            else
+              echo "  ERROR: Failed to push '$branch'"
+              failed=$((failed + 1))
+            fi
+          done <<< "$branch_list"
+
+          echo ""
+          echo "=========================================="
+          echo "Summary:"
+          echo "  Updated: $updated"
+          echo "  Failed:  $failed"
+          echo "=========================================="
+
+          if [ "$failed" -gt 0 ]; then
+            exit 1
+          fi
