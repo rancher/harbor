@@ -97,6 +97,10 @@ jobs:
             # Check if branch exists locally
             if git show-ref --quiet "remotes/origin/$branch"; then
               echo "Branch '$branch' exists locally, fetching latest from upstream..."
+              if git diff --quiet "upstream/$branch" "remotes/origin/$branch"; then
+                echo "Branch '$branch' is already up-to-date with upstream; skipping."
+                continue
+              fi
               git checkout --track "origin/$branch"
               git pull upstream "$branch" --ff-only || {
                 echo "  WARNING: Fast-forward failed for '$branch', force updating..."
