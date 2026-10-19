@@ -112,7 +112,7 @@ jobs:
             fi
 
             # Push to origin
-            if git push origin "$branch" --force-with-lease 2>/dev/null; then
+            if git push origin "$branch" --force-with-lease; then
               echo "  SUCCESS: Updated and pushed '$branch'"
               updated=$((updated + 1))
             else
