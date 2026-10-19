@@ -99,6 +99,7 @@ jobs:
               echo "Branch '$branch' exists locally, fetching latest from upstream..."
               if git diff --quiet "upstream/$branch" "remotes/origin/$branch"; then
                 echo "Branch '$branch' is already up-to-date with upstream; skipping."
+                skipped=$((skipped + 1))
                 continue
               fi
               git checkout --track "origin/$branch"
@@ -125,6 +126,7 @@ jobs:
           echo "=========================================="
           echo "Summary:"
           echo "  Updated: $updated"
+          echo "  Skipped: $skipped"
           echo "  Failed:  $failed"
           echo "=========================================="
 
