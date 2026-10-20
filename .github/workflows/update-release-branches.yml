@@ -61,19 +61,22 @@ jobs:
       - name: Filter branches (if specified via input)
         if: github.event.inputs.target_branches != ''
         id: filter
+        env:
+          TARGET_BRANCHES: ${{ github.event.inputs.target_branches }}
         run: |
-          IFS=',' read -ra TARGETS <<< "${{ github.event.inputs.target_branches }}"
+          IFS=',' read -ra TARGETS <<< "$TARGET_BRANCHES"
           filtered=$(printf '%s\n' "${TARGETS[@]}" | jq -R . | jq -s .)
           echo "filtered_json=$filtered" >> "$GITHUB_OUTPUT"
 
       - name: Update branches
         env:
           BRANCHES_JSON: ${{ steps.branches.outputs.branches_json }}
+          FILTERED_JSON: ${{ steps.filter.outputs.filtered_json }}
         run: |
           branches_json="$BRANCHES_JSON"
           
-          if [ -n "${{ steps.filter.outputs.filtered_json }}" ]; then
-            branches_json="${{ steps.filter.outputs.filtered_json }}"
+          if [ -n "$FILTERED_JSON" ]; then
+            branches_json="$FILTERED_JSON"
           fi
 
           if [ "$branches_json" = "null" ] || [ "$branches_json" = "" ]; then
