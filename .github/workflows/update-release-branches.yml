@@ -63,13 +63,17 @@ jobs:
           echo "Found ${#branches[@]} release branches"
 
       - name: Filter branches (if specified via input)
-        if: github.event.inputs.target_branches != ''
+        if: ${{ github.event.inputs.target_branches }} != ''
         id: filter
         env:
           TARGET_BRANCHES: ${{ github.event.inputs.target_branches }}
+          BRANCHES_JSON: ${{ steps.branches.outputs.branches_json }}
         run: |
           IFS=',' read -ra TARGETS <<< "$TARGET_BRANCHES"
-          filtered=$(printf '%s\n' "${TARGETS[@]}" | jq -R . | jq -s .)
+          filter=$(printf '%s\n' "${TARGETS[@]}" | jq -R . | jq -s . | tr -d '\n' | tr -d '[:space:]')
+
+          filtered=$(jq -cn "$BRANCHES_JSON - ($BRANCHES_JSON - $filter)")
+
           echo "filtered_json=$filtered" >> "$GITHUB_OUTPUT"
 
       - name: Update branches
