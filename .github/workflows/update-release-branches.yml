@@ -69,8 +69,7 @@ jobs:
           TARGET_BRANCHES: ${{ github.event.inputs.target_branches }}
           BRANCHES_JSON: ${{ steps.branches.outputs.branches_json }}
         run: |
-          IFS=',' read -ra TARGETS <<< "$TARGET_BRANCHES"
-          filter=$(printf '%s\n' "${TARGETS[@]}" | jq -R . | jq -s . | tr -d '\n' | tr -d '[:space:]')
+          filter=$(echo "\"${TARGET_BRANCHES}\"" | jq 'split(",")')
 
           filtered=$(jq -cn "$BRANCHES_JSON - ($BRANCHES_JSON - $filter)")
 
