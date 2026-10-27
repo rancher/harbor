@@ -42,7 +42,7 @@ jobs:
 
       - name: Add upstream remote
         run: |
-          git remote add upstream https://github.com/goharbor/harbor.git 2>/dev/null || true
+          git remote get-url upstream &>/dev/null || git remote add upstream https://github.com/goharbor/harbor.git
 
       - name: Fetch upstream
         run: |
