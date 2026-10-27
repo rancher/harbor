@@ -71,6 +71,7 @@ jobs:
 
       - name: Filter branches (if specified via input)
         id: filter
+        if: ${{ steps.branches.outputs.branches_json != '' }}
         env:
           TARGET_BRANCHES: ${{ github.event.inputs.target_branches }}
           BRANCHES_JSON: ${{ steps.branches.outputs.branches_json }}
@@ -82,6 +83,7 @@ jobs:
           echo "filtered_json=$filtered" >> "$GITHUB_OUTPUT"
 
       - name: Update branches
+        if: ${{ steps.branches.outputs.branches_json != '' }}
         env:
           BRANCHES_JSON: ${{ steps.branches.outputs.branches_json }}
           FILTERED_JSON: ${{ steps.filter.outputs.filtered_json }}
