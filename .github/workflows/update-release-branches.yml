@@ -1,0 +1,153 @@
+name: Update Release Branches
+
+on:
+  schedule:
+    - cron: '0 8 * * *'
+  workflow_dispatch:
+    inputs:
+      target_branches:
+        description: 'Comma-separated list of release branches to update (empty for all)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: update-release-branches
+  cancel-in-progress: false
+
+jobs:
+  update-release-branches:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: rancher-eio/read-vault-secrets@v3
+        with:
+          secrets: |
+            github/token/rancher--harbor--contents--workflows--write token | GH_TOKEN
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ env.GH_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote get-url upstream &>/dev/null || git remote add upstream https://github.com/goharbor/harbor.git
+
+      - name: Fetch upstream
+        run: |
+          git fetch upstream --tags --force
+
+      - name: Get release branches from upstream
+        id: branches
+        run: |
+          # Fetch all release branches matching release-X.X.X pattern
+          branches=()
+          while IFS= read -r branch; do
+            branches+=("$branch")
+          done < <(git ls-remote --refs upstream 'refs/heads/release-*' | cut -f2 | sed 's|refs/heads/||' | sort -V)
+
+          echo "Found ${#branches[@]} release branches"
+
+          if [ ${#branches[@]} -eq 0 ]; then
+            echo "No release branches found upstream"
+            echo "branches_json=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Convert to JSON array
+          json=$(printf '%s\n' "${branches[@]}" | jq -R . | jq -s . | tr -d '\n' | tr -d '[:space:]')
+          echo "branches_json=$json" >> "$GITHUB_OUTPUT"
+
+      - name: Filter branches (if specified via input)
+        id: filter
+        if: ${{ steps.branches.outputs.branches_json != '' }}
+        env:
+          TARGET_BRANCHES: ${{ github.event.inputs.target_branches }}
+          BRANCHES_JSON: ${{ steps.branches.outputs.branches_json }}
+        run: |
+          filter=$(echo "\"${TARGET_BRANCHES}\"" | jq 'split(",")')
+
+          filtered=$(jq -cn "$BRANCHES_JSON - ($BRANCHES_JSON - $filter)")
+
+          echo "filtered_json=$filtered" >> "$GITHUB_OUTPUT"
+
+      - name: Update branches
+        if: ${{ steps.branches.outputs.branches_json != '' }}
+        env:
+          BRANCHES_JSON: ${{ steps.branches.outputs.branches_json }}
+          FILTERED_JSON: ${{ steps.filter.outputs.filtered_json }}
+        run: |
+          branches_json="$BRANCHES_JSON"
+          
+          if [ "$FILTERED_JSON" != "[]" ]; then
+            branches_json="$FILTERED_JSON"
+          fi
+
+          if [ "$branches_json" = "null" ] || [ "$branches_json" = "" ]; then
+            echo "No branches to update"
+            exit 0
+          fi
+
+          branch_list=$(echo "$branches_json" | jq -r '.[]')
+
+          updated=0
+          skipped=0
+          failed=0
+
+          while IFS= read -r branch; do
+            [ -z "$branch" ] && continue
+
+            echo "=========================================="
+            echo "Processing: $branch"
+            echo "=========================================="
+
+            # Check if branch exists locally
+            if git show-ref --quiet "remotes/origin/$branch"; then
+              echo "Branch '$branch' exists locally, fetching latest from upstream..."
+              if git diff --quiet "upstream/$branch" "remotes/origin/$branch"; then
+                echo "Branch '$branch' is already up-to-date with upstream; skipping."
+                skipped=$((skipped + 1))
+                continue
+              fi
+              git checkout --track "origin/$branch"
+              git pull upstream "$branch" --ff-only || {
+                echo "  WARNING: Fast-forward failed for '$branch', force updating..."
+                git reset --hard "upstream/$branch"
+              }
+            else
+              echo "Branch '$branch' does not exist locally, creating from upstream..."
+              git checkout -b "$branch" "upstream/$branch"
+            fi
+
+            # Push to origin
+            if git push origin "$branch" --force-with-lease; then
+              echo "  SUCCESS: Updated and pushed '$branch'"
+              updated=$((updated + 1))
+            else
+              echo "  ERROR: Failed to push '$branch'"
+              failed=$((failed + 1))
+            fi
+          done <<< "$branch_list"
+
+          echo ""
+          echo "=========================================="
+          echo "Summary:"
+          echo "  Updated: $updated"
+          echo "  Skipped: $skipped"
+          echo "  Failed:  $failed"
+          echo "=========================================="
+
+          if [ "$failed" -gt 0 ]; then
+            exit 1
+          fi
